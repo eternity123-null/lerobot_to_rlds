@@ -12,13 +12,14 @@ import numpy as np
 import torch
 import traceback  # Add this to get detailed error information
 from tqdm import tqdm  # Add this import for the progress bar
+from PIL import Image
 import h5py
 # Add the path to the LeRobot library
 # Adjust this path to point to the directory containing the lerobot package
-sys.path.append('/home/ke/Documents/lerobot_serl')  # Update this path to where your lerobot code is located
+sys.path.append('/inspire/hdd/project/embodied-intelligence/xiaoyunxiao-240108120113/zcd/lerobot')  # Update this path to where your lerobot code is located
 
 # Function to load your dataset
-def load_dataset_and_save_to_disk(repo_id, root=None, local_files_only=False, output_dir=None):
+def load_dataset_and_save_to_disk(repo_id, root=None, local_files_only=False, output_dir=None, img_resize_size=256):
     """
     Load a dataset by repo_id using LeRobotDataset.
     
@@ -35,9 +36,11 @@ def load_dataset_and_save_to_disk(repo_id, root=None, local_files_only=False, ou
         try:
             from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
             
+            print("begin load dataset!",flush=True)
             # Load the LeRobot dataset
             lerobot_dataset = LeRobotDataset(repo_id, root=root, local_files_only=local_files_only)
-            
+            print("camera_keys: ",lerobot_dataset.meta.camera_keys, flush=True)
+            tasks = lerobot_dataset.meta.tasks
             # Create a dataset structure compatible with our converter
             dataset = {
                 "episodes": [],
@@ -71,6 +74,7 @@ def load_dataset_and_save_to_disk(repo_id, root=None, local_files_only=False, ou
             
             # Get number of episodes
             num_episodes = len(lerobot_dataset.episode_data_index["from"])
+            print("Get ", num_episodes, " episodes!",flush=True)
             
             # Process each episode
             for episode_idx in tqdm(range(num_episodes)):
@@ -91,13 +95,14 @@ def load_dataset_and_save_to_disk(repo_id, root=None, local_files_only=False, ou
                     "file_path": f"episode_{episode_idx}"
                 }
                 
-                # Extract language instruction if available
-                language_instruction = ""
-                if hasattr(lerobot_dataset, 'get_language_instruction'):
-                    language_instruction = lerobot_dataset.get_language_instruction(episode_idx)
+                batch_idx = 0
                 
                 # Process each frame in the episode
                 for batch in dataloader:
+                    
+                    if(batch_idx%100==0):
+                        print("begin process frame ",batch_idx," in episode ",episode_idx, flush=True)
+                    # print("batch:\n",batch,flush=True)
                     # Convert batch tensors to numpy arrays and remove batch dimension
                     frame = {}
                     
@@ -116,15 +121,29 @@ def load_dataset_and_save_to_disk(repo_id, root=None, local_files_only=False, ou
                     # Add camera images
                     for key in lerobot_dataset.meta.camera_keys:
                         if key in batch:
-                            frame[key.replace('.', '_')] = to_hwc_uint8_numpy(batch[key][0])
+                            img = to_hwc_uint8_numpy(batch[key][0])
+                            # 下采样到 256×256
+                            # 注意：PIL 期望输入是 H×W×3 的 uint8 数组
+                            pil_img = Image.fromarray(img)
+                            pil_img = pil_img.resize((img_resize_size, img_resize_size), Image.BILINEAR)
+                            img_resized = np.array(pil_img)  # 重新转回 numpy
+                            # if batch_idx==10:
+                            #     print("img shape:", img_resized.shape,flush=True)
+                            frame[key.replace('.', '_')] = img_resized
                     
                     # Add language instruction
-                    if language_instruction:
-                        frame['language_instruction'] = language_instruction
+                    if 'task' in batch:
+                        task = batch['task'][0]
+                        frame['language_instruction'] = task
                     else:
                         frame['language_instruction'] = ""
+
                     
+                    # if batch_idx==10:
+                    #     print("frame:\n",frame,flush=True)
                     episode["frames"].append(frame)
+                    
+                    batch_idx+=1
                 
                 # save episode to disk
                 # Save episode to disk using a more memory-efficient format
@@ -177,14 +196,14 @@ def load_dataset_and_save_to_disk(repo_id, root=None, local_files_only=False, ou
                                 else:
                                     # Convert other types to string if needed
                                     frames_group[key][frame_idx] = str(value)
-                    
+                    print("inst:\n",f["frames"]["language_instruction"])
                     # Add camera keys as a list attribute for reference
                     if hasattr(lerobot_dataset, 'meta') and hasattr(lerobot_dataset.meta, 'camera_keys'):
                         camera_keys = [key.replace('.', '_') for key in lerobot_dataset.meta.camera_keys]
                         f.attrs['camera_keys'] = np.array(camera_keys, dtype=h5py.special_dtype(vlen=str))
             
-            #     # Add episode to dataset
-            #     dataset["episodes"].append(episode)
+                # # Add episode to dataset
+                # dataset["episodes"].append(episode)
             
             # return dataset
             
@@ -257,10 +276,15 @@ def main():
         default=None,
         help="Root directory for the dataset stored locally.",
     )
-    
+    parser.add_argument(
+        "--img_resize_size",
+        type=int,
+        help="Size to resize images to. Final images will be square (img_resize_size x img_resize_size pixels).",
+        default=256,
+    )
     args = parser.parse_args()
     # Load the dataset
-    dataset = load_dataset_and_save_to_disk(args.repo_id, args.root, args.local_files_only, args.output_dir)
+    dataset = load_dataset_and_save_to_disk(args.repo_id, args.root, args.local_files_only, args.output_dir, args.img_resize_size)
     
 
 if __name__ == "__main__":

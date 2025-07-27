@@ -1,3 +1,28 @@
+import h5py
+import sys
+with h5py.File("/inspire/hdd/project/embodied-intelligence/xiaoyunxiao-240108120113/datasets/tmp/rlds_test/tape1/train/episode_0.h5", "r") as F:
+    print(F['frames'].keys())
+    print(F['frames']['action'])
+    # print(F['hand_left'])
+    # print(F['hand_right'])
+    # print(F['head'])
+    # print(F['language_instruction'])
+    print(F['frames']['state'])
+    # print(F['timestamps'])
+    # actions = F['frames']['action'][:]
+    # states = F['frames']["state"][:]
+    # images = F['frames']["observation_images_cam_high"][:]  # Primary camera (top-down view)
+    # print("images shape:", images.shape)
+    # left_wrist_images = F['frames']["observation_images_cam_left_wrist"][:]  # Left wrist camera
+    # right_wrist_images = F['frames']["observation_images_cam_right_wrist"][:]  # Right wrist camera
+    # low_cam_images = F['frames']["observation_images_cam_low"][:]  # Low third-person camera
+    
+    # language_instruction = str(F['language_instruction'][:])
+    
+
+
+sys.exit()
+
 from typing import Iterator, Tuple, Any
 
 import os
@@ -8,6 +33,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import sys
+from PIL import Image
 sys.path.append('.')
 from .conversion_utils import MultiThreadedDatasetBuilder
 import os
@@ -24,29 +50,26 @@ def _generate_examples(paths) -> Iterator[Tuple[str, Any]]:
         # Load raw data
         with h5py.File(episode_path, "r") as F:
             # breakpoint()
-            actions = F['frames']['action'][:]
-            states = F['frames']["state"][:]
-            images = F['frames']["observation_images_cam_high"][:]  # Primary camera (top-down view)
-            print("images shape:", images.shape)
-            left_wrist_images = F['frames']["observation_images_cam_left_wrist"][:]  # Left wrist camera
-            right_wrist_images = F['frames']["observation_images_cam_right_wrist"][:]  # Right wrist camera
-            low_cam_images = F['frames']["observation_images_cam_low"][:]  # Low third-person camera
-            # reward = F['frames']["reward"][:]
+            actions = F['action'][:]
+            states = F["state"][:]
+            images = F["head"][:]  # Primary camera (top-down view) (528, 480, 640, 3) HWC uint8
+            left_wrist_images = F["hand_left"][:]  # Left wrist camera
+            right_wrist_images = F["hand_right"][:]  # Right wrist camera
             language_instruction = str(F['frames']["language_instruction"][:])
-            print("instruction:",language_instruction)
 
         # Assemble episode: here we're assuming demos so we set reward to 1 at the end
         episode = []
         for i in range(actions.shape[0]):
+            
             episode.append({
                 'observation': {
                     'image': images[i],
-                    'left_wrist_image': left_wrist_images[i],
-                    'right_wrist_image': right_wrist_images[i], 
-                    'low_cam_image': low_cam_images[i],
-                    'state': np.asarray(states[i], np.float32),
+                    'image': np.array(Image.fromarray(images[i]).resize((256,256), Image.BILINEAR)),
+                    'left_wrist_image': np.array(Image.fromarray(left_wrist_images[i]).resize((256,256), Image.BILINEAR)),
+                    'right_wrist_image': np.array(Image.fromarray(right_wrist_images[i]).resize((256,256), Image.BILINEAR)), 
+                    'state': np.asarray(states[i][18:32], np.float32),
                 },
-                'action': np.asarray(actions[i], dtype=np.float32),
+                'action': np.asarray(actions[i][18:32], dtype=np.float32),
                 'discount': 1.0,
                 'reward': float(i == (actions.shape[0] - 1)),
                 'is_first': i == 0,
@@ -110,12 +133,6 @@ class lerobot_dataset(MultiThreadedDatasetBuilder):
                             encoding_format='jpeg',
                             doc='Right wrist camera RGB observation.',
                         ),
-                        'low_cam_image': tfds.features.Image(
-                            shape=(256, 256, 3),
-                            dtype=np.uint8,
-                            encoding_format='jpeg',
-                            doc='Lower camera RGB observation.',
-                        ),
                         'state': tfds.features.Tensor(
                             shape=(14,),
                             dtype=np.float32,
@@ -160,6 +177,18 @@ class lerobot_dataset(MultiThreadedDatasetBuilder):
 
     def _split_paths(self):
         """Define filepaths for data splits."""
+        data_root_path = "/inspire/ssd/project/embodied-intelligence/public/jintian/WAIC/UniDomain/datasets/processed_data/agibot/Scoop"
+        all_files = [
+            os.path.join(data_root_path, f) 
+            for f in os.listdir(data_root_path) 
+            if f.endswith('.h5')
+        ]
+        np.random.seed(2025)  # 固定随机种子以保证可重复性
+        np.random.shuffle(all_files)
+        split_idx = int(len(all_files) * 0.95)
+        train_files = all_files[:split_idx]
+        val_files = all_files[split_idx:]
         return {
-            "train": glob.glob("/inspire/hdd/project/embodied-intelligence/xiaoyunxiao-240108120113/datasets/tmp/rlds_test/tape1/train/*.h5"),
+            "train": train_files,
+            "val": val_files,
         }
